@@ -1,0 +1,44 @@
+services:
+  casino-bot:
+    container_name: casino-bot
+    image: g8tsz/sweepstakes-autoclaim:testing
+    ports:
+      - "5900:5900"
+
+    environment:
+      - CHROME_INSTANCE_DIR=/data/chrome
+      - CHROME_PROFILE_DIR=Default
+      - PYTHONPATH=/app:/app/apis:/app/app
+      - FC_USER_DATA_DIR=/data/fortunecoins
+
+    volumes:
+      - chrome-profile:/data/chrome
+      - chrome-profile:/data/fortunecoins
+      - ./CAPTCHA-Solver-auto-hCAPTCHA-reCAPTCHA-freely-Chrome-Web-Store.crx:/temp/CAPTCHA-Solver.crx
+    env_file:
+      - .env
+
+    shm_size: "2g"
+    restart: unless-stopped
+
+    entrypoint: ["/bin/bash","-lc","bash /app/entrypoint.sh"]
+
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    container_name: watchtower
+    image: containrrr/watchtower:latest
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_POLL_INTERVAL=3600
+
+    restart: unless-stopped
+
+volumes:
+  chrome-profile:

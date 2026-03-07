@@ -1,0 +1,17 @@
+selenium
+undetected-chromedriver
+webdriver-manager
+datetime
+regex
+discord
+discord.py
+python-dotenv
+seleniumbase
+nodriver
+bs4
+BeautifulSoup4
+pyautogui
+pillow
+pytesseract
+opencv-python-headless
+brotli
