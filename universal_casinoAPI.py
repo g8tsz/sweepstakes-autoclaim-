@@ -184,8 +184,16 @@ def _embed(title: str, description: str, color: int = 0x3B82F6) -> discord.Embed
     return e
 
 
+def _is_google_login_casino(config: Dict[str, Any]) -> bool:
+    """True only if this casino is configured for Google login (we only use these)."""
+    if not config.get("use_google_login", False):
+        return False
+    selectors = config.get("google_btn_selectors") or []
+    return len(selectors) > 0
+
+
 def load_universal_casinos_config(path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Load list of universal casino configs from JSON file."""
+    """Load list of universal casino configs from JSON file. Returns only casinos that support Google login."""
     if path is None:
         path = os.getenv("UNIVERSAL_CASINOS_CONFIG", "casinos_universal.json")
     if not os.path.isfile(path):
@@ -196,7 +204,9 @@ def load_universal_casinos_config(path: Optional[str] = None) -> List[Dict[str, 
     except Exception:
         return []
     if isinstance(data, list):
-        return data
-    if isinstance(data, dict) and "casinos" in data:
-        return data["casinos"]
-    return []
+        raw = data
+    elif isinstance(data, dict) and "casinos" in data:
+        raw = data["casinos"]
+    else:
+        return []
+    return [c for c in raw if _is_google_login_casino(c)]

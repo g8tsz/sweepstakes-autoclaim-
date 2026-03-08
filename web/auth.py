@@ -13,6 +13,7 @@ from fastapi.responses import RedirectResponse
 SECRET = os.getenv("WEB_SECRET", "change-me-in-production")
 COOKIE_NAME = "casino_claim_session"
 MAX_AGE = 86400 * 30  # 30 days
+COOKIE_SECURE = os.getenv("WEB_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 
 
 def _sign(data: str) -> str:
@@ -24,7 +25,9 @@ def set_session(response: Response, user_id: int) -> None:
     b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
     sig = _sign(b64)
     value = f"{b64}.{sig}"
-    response.set_cookie(COOKIE_NAME, value, max_age=MAX_AGE, httponly=True, samesite="lax")
+    response.set_cookie(
+        COOKIE_NAME, value, max_age=MAX_AGE, httponly=True, samesite="lax", secure=COOKIE_SECURE
+    )
 
 
 def get_session(request: Request) -> Optional[int]:

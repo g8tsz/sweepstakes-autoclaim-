@@ -1,7 +1,6 @@
 # Casino Claim Web — Build Chrome driver for automation (no Discord dependency).
 
 import os
-import glob
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options

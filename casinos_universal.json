@@ -1,4 +1,5 @@
 {
+  "_comment": "Only entries with use_google_login: true and non-empty google_btn_selectors are used; others are pruned at load.",
   "casinos": [
     {
       "key": "wowvegas",

@@ -78,21 +78,21 @@ async def run_all_casinos_for_user(user_id: int, configs: List[Dict[str, Any]]) 
 
 async def worker_loop():
     """Main loop: every TICK_SLEEP_SEC, check users with loop enabled and run their casinos if due."""
-    configs = load_universal_config()
-    if not configs:
-        log.warning("Web worker: no universal casino configs loaded.")
-        return
     last_run: Dict[int, float] = {}
     while True:
         try:
-            users = db.get_users_with_loop_enabled()
-            now = time.time()
-            for user_id in users:
-                last = last_run.get(user_id, 0)
-                if now - last >= LOOP_INTERVAL_SEC:
-                    log.info("Web worker: running casinos for user %s", user_id)
-                    await run_all_casinos_for_user(user_id, configs)
-                    last_run[user_id] = now
+            configs = load_universal_config()
+            if not configs:
+                log.debug("Web worker: no universal casino configs loaded yet.")
+            else:
+                users = db.get_users_with_loop_enabled()
+                now = time.time()
+                for user_id in users:
+                    last = last_run.get(user_id, 0)
+                    if now - last >= LOOP_INTERVAL_SEC:
+                        log.info("Web worker: running casinos for user %s", user_id)
+                        await run_all_casinos_for_user(user_id, configs)
+                        last_run[user_id] = now
         except asyncio.CancelledError:
             break
         except Exception as e:

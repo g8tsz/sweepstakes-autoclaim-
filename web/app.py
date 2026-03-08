@@ -53,6 +53,16 @@ if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    """Return a simple 404 page for unknown routes."""
+    html = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Not found</title></head><body style='font-family:system-ui;background:#1a1a2e;color:#eee;padding:2rem;'>"
+        "<h1>Not found</h1><p>This page does not exist.</p><p><a href='/'>Go home</a></p></body></html>"
+    )
+    return HTMLResponse(content=html, status_code=404)
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -84,7 +94,7 @@ class TwoFABody(BaseModel):
 # Helpers for page data
 # ---------------------------------------------------------------------------
 def _dashboard_data(user_id: int):
-    configs = _safe__safe_load_universal_config()
+    configs = _safe_load_universal_config()
     return {
         "loop_enabled": db.get_loop_enabled(user_id),
         "pending_2fa": db.get_pending_2fa_for_user(user_id),
@@ -94,7 +104,7 @@ def _dashboard_data(user_id: int):
 
 
 def _casino_choices():
-    configs = _safe__safe_load_universal_config()
+    configs = _safe_load_universal_config()
     keys = sorted(set((c.get("key") or c.get("name", "")).lower().replace(" ", "") for c in configs if (c.get("key") or c.get("name"))))
     known = keys + ["stake", "chanced", "fortunecoins", "modo", "crowncoins", "chumba", "globalpoker"]
     return sorted(set(k.upper() for k in known))
