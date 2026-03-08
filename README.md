@@ -1,20 +1,17 @@
 # Casino Claim 
-Never miss a casino bonus again! A discord app for claiming social casino bonuses.
+Never miss a casino bonus again. A **full HTML website** with automation for claiming social casino bonuses—login, set your credentials, start the loop or run a casino now, and submit 2FA in the browser.
 
 <p>
 <img src="https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54"/>
 <img src="https://img.shields.io/badge/-selenium-%43B02A?style=for-the-badge&logo=selenium&logoColor=white"/>
-<img src="https://img.shields.io/badge/-opencv-%235C3EE8?style=for-the-badge&logo=opencv&logoColor=white"/>
-<img src="https://img.shields.io/badge/-pyautogui-%23FF6F00?style=for-the-badge&logo=python&logoColor=white"/>
-<img src="https://img.shields.io/badge/-seleniumbase-%23323330?style=for-the-badge&logo=selenium&logoColor=white"/>
-<img src="https://img.shields.io/badge/-requests-%232c2f33?style=for-the-badge&logo=&logoColor=white"/>
+<img src="https://img.shields.io/badge/-FastAPI-%232c2f33?style=for-the-badge&logo=fastapi&logoColor=white"/>
 <img src="https://img.shields.io/badge/-discord.py-%232c2f33?style=for-the-badge&logo=discord&logoColor=white"/>
 <img src="https://img.shields.io/badge/-docker-%232c2f33?style=for-the-badge&logo=docker&logoColor=white"/>
 
 </p>
 
 # About 
-Casino Claim is a discord bot for claiming social casino bonuses. The bot will automatically claim your bonus, provide a countdown for the next, and authenticate if needed.
+Casino Claim is a **website + automation** app: you use the browser to sign up, store your Google and casino credentials, turn the automated loop on or off, run a single casino claim now, and enter 2FA when prompted. The same automation is also available as an optional Discord bot.
 
 # DISCLAIMER 
 I am not responsible for any financial loss or gain incurred with the use of this tool. I have no relationship with any business or website. This tool is for educational purposes only and is provided as is with no warranty.
@@ -34,25 +31,45 @@ For direct support, feature/casino requests, and community access, please sponso
 This program is heavily inspired by auto-rsa from Nelson Dane. Go check it out and give it a star here: https://github.com/NelsonDane/auto-rsa
 
 
-# Installation 
-1. Install `git` for your operating system. Then, install `docker` and `docker-compose` for your operating system. You can follow this guide to install docker and docker-compose: https://docs.docker.com/get-docker/ Note: If you are using Windows, I strongly recommend docker desktop for Windows.
+# Quick start (website)
 
-2. Clone this repository and cd into it:
 ```bash
 git clone https://github.com/g8tsz/sweepstakes-autoclaim-.git
 cd sweepstakes-autoclaim-
+pip install -r requirements.txt
+python run_web.py
 ```
-3. Create a discord bot and invite it to your server. You can follow this guide to create a discord bot: [guide](discordBot.md)
 
-4. Create the .env file in the root directory of the project by editing the .env.example file and add the following:
-    1. Add `DISCORD_TOKEN` and `DISCORD_CHANNEL` to your `.env` file.
-    2. Add your casino login credentials by editing the .env.example file. After editing, rename the file to .env and save. 
-5. run `docker compose up -d`
-6. The Bot should now appear in Discord and start the 24 hour loop.
+Open **http://localhost:8000** — sign up, then use **Profile** to set your Google and casino credentials, **Dashboard** to start the loop or run a casino now, and **History** to see results. When a run needs 2FA, the dashboard shows a form to enter the code.
 
+# Installation (website)
 
-# Usage 
-The bot is designed to check most casinos automatically in 2-hour intervals, with commands to check status of bonus. Some casinos only check once every 24 hours, but this can be changed with `!config` command. `!start` and `!stop` will start and stop the main loop. Running `!help` at any time provides the available commands. `!cleardatadir` command is useful for sites giving location issues, as well as sites you need to re-authenticate with.
+1. **Python 3.9+** and pip.
+2. Clone the repo and install dependencies:
+   ```bash
+   git clone https://github.com/g8tsz/sweepstakes-autoclaim-.git
+   cd sweepstakes-autoclaim-
+   pip install -r requirements.txt
+   ```
+3. (Optional) Copy `.env.example` to `.env` and set `WEB_SECRET` for production. For automation you need Chrome/Chromium and can set `CHROME_USER_DATA_DIR` for a persistent profile.
+4. Run the site: `python run_web.py` (or `uvicorn web.app:app --host 0.0.0.0 --port 8000`).
+5. Open http://localhost:8000 → Sign up → Profile (set Google + casino logins) → Dashboard (Start loop or Run now).
+
+To run **without** Chrome/automation (UI only), set `WEB_WORKER_ENABLED=0` in `.env`.
+
+# Website features
+
+- **Login / Sign up** — Create an account; sessions use signed cookies.
+- **Profile** — Save your **Google** email/password (for “Sign in with Google” casinos) and **casino** credentials (e.g. STAKE, CHANCED) as `username:password` per casino.
+- **Dashboard** — See loop status (on/off), **Start loop** / **Stop loop** buttons, **Run now** (select a casino and run one claim), and a **2FA** form when a run is waiting for your code. Recent runs are listed.
+- **History** — Full list of your runs (success, error, or info) with timestamps.
+- **Automation** — When the loop is on, the app runs your universal casinos (from `casinos_universal.json`) on a schedule using your profile credentials. Results and 2FA prompts appear on the dashboard.
+
+Universal casinos are defined in **`casinos_universal.json`** (add sites with Google login without writing code). The site uses **SQLite** (`web_data.db` by default) for users, profiles, run history, and 2FA state.
+
+# Optional: Discord bot
+
+You can also run the project as a Discord bot (same automation, different interface). See [discordBot.md](discordBot.md) to create a bot. Set `DISCORD_TOKEN` and `DISCORD_CHANNEL` in `.env`, then run `python main.py` (or use Docker). The bot supports slash commands and `!` prefix; `/profile` stores credentials per user, and the loop can use `DEFAULT_PROFILE_USER_ID` to use a user’s profile.
 
 ## Slash commands (/) and /profile
 You can use **slash commands** instead of `!` prefix:
@@ -77,15 +94,7 @@ You can support **any casino that offers “Sign in with Google”** without wri
 - Universal casinos are added to the main loop automatically. Manual check: **`!universal <key>`** (e.g. `!universal wowvegas`).
 - To add a new casino: edit **`casinos_universal.json`** and add an entry with `key`, `name`, `base_url`, `use_google_login`, `google_btn_selectors`, `claim_selectors`, and optional `countdown_selector`. See the existing entries for the format. No code change required.
 
-## Web app (browser UI)
-A **web interface** provides the same automation without Discord: sign up, set Google and casino credentials, start/stop the loop, run a casino now, and submit 2FA in the browser when prompted. From the project root:
-
-```bash
-uvicorn web.app:app --reload --host 0.0.0.0 --port 8000
-```
-
-Then open http://localhost:8000. See **`web/README.md`** for env vars and API details.
-
+See **`web/README.md`** for website env vars (`WEB_SECRET`, `WEB_DATABASE_PATH`, `WEB_WORKER_ENABLED`, etc.).
 
 # Supported Casinos 
 | Casino          | Auto Claim | Countdown Timer | Backend API | Bonus (SC)            | Trusted? (payment proof) |

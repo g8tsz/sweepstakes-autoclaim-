@@ -7,7 +7,13 @@ Browser-based UI for the same automation as the Discord bot. Everything is **pag
 From the **project root** (parent of `web/`):
 
 ```bash
-uvicorn web.app:app --reload --host 0.0.0.0 --port 8000
+python run_web.py
+```
+
+Or with uvicorn directly:
+
+```bash
+uvicorn web.app:app --host 0.0.0.0 --port 8000
 ```
 
 Then open http://localhost:8000

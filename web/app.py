@@ -23,6 +23,14 @@ from web.auth import get_session, set_session, clear_session, require_user
 from web.worker import worker_loop, start_worker, stop_worker, load_universal_config
 
 
+def _safe_load_universal_config():
+    """Return universal casino config list; empty list on any error so the app still runs."""
+    try:
+        return load_universal_config()
+    except Exception:
+        return []
+
+
 def get_user_id(request: Request) -> Optional[int]:
     return get_session(request)
 
@@ -76,16 +84,17 @@ class TwoFABody(BaseModel):
 # Helpers for page data
 # ---------------------------------------------------------------------------
 def _dashboard_data(user_id: int):
+    configs = _safe__safe_load_universal_config()
     return {
         "loop_enabled": db.get_loop_enabled(user_id),
         "pending_2fa": db.get_pending_2fa_for_user(user_id),
         "recent_runs": db.get_run_history(user_id, limit=20),
-        "universal_casino_count": len(load_universal_config()),
+        "universal_casino_count": len(configs),
     }
 
 
 def _casino_choices():
-    configs = load_universal_config()
+    configs = _safe__safe_load_universal_config()
     keys = sorted(set((c.get("key") or c.get("name", "")).lower().replace(" ", "") for c in configs if (c.get("key") or c.get("name"))))
     known = keys + ["stake", "chanced", "fortunecoins", "modo", "crowncoins", "chumba", "globalpoker"]
     return sorted(set(k.upper() for k in known))
@@ -186,7 +195,7 @@ async def page_run_now(request: Request, response: Response, casino_key: str = F
     if user_id is None:
         return RedirectResponse(url="/login", status_code=302)
     key = (casino_key or "").strip().lower().replace(" ", "")
-    configs = load_universal_config()
+    configs = _safe_load_universal_config()
     cfg = next((c for c in configs if (c.get("key") or c.get("name", "")).lower().replace(" ", "") == key), None)
     if not cfg:
         return RedirectResponse(url="/dashboard?error=Unknown+casino", status_code=302)
@@ -303,6 +312,12 @@ async def api_login(body: LoginBody, response: Response):
     return {"ok": True, "user_id": user_id}
 
 
+@app.post("/logout")
+async def page_logout(response: Response):
+    clear_session(response)
+    return RedirectResponse(url="/login", status_code=302)
+
+
 @app.post("/api/logout")
 async def api_logout(response: Response):
     clear_session(response)
@@ -361,7 +376,7 @@ async def api_list_casinos(request: Request):
     user_id = get_user_id(request)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Not logged in")
-    configs = load_universal_config()
+    configs = _safe_load_universal_config()
     keys = sorted(set((c.get("key") or c.get("name", "")).lower().replace(" ", "") for c in configs if (c.get("key") or c.get("name"))))
     known = keys + ["STAKE", "CHANCED", "FORTUNECOINS", "MODO", "CROWNCOINS", "CHUMBA", "GLOBALPOKER"]
     return {"casinos": sorted(set(k.upper() for k in known))}
@@ -399,7 +414,7 @@ async def api_status(request: Request):
     enabled = db.get_loop_enabled(user_id)
     pending = db.get_pending_2fa_for_user(user_id)
     history = db.get_run_history(user_id, limit=20)
-    configs = load_universal_config()
+    configs = _safe_load_universal_config()
     return {
         "loop_enabled": enabled,
         "pending_2fa": pending,
@@ -417,7 +432,7 @@ async def api_run_now(request: Request, casino_key: str):
     if user_id is None:
         raise HTTPException(status_code=401, detail="Not logged in")
     key = casino_key.strip().lower().replace(" ", "")
-    configs = load_universal_config()
+    configs = _safe_load_universal_config()
     cfg = next((c for c in configs if (c.get("key") or c.get("name", "")).lower().replace(" ", "") == key), None)
     if not cfg:
         raise HTTPException(status_code=404, detail=f"Unknown casino: {casino_key}")
