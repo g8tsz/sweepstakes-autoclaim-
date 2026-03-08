@@ -2,6 +2,9 @@
 venv/
 __pycache__
 casino_bonus.db
+user_profiles.json
+web_data.db
+web/*.db
 
 # .gitignore for chrome data
 .runtime/
@@ -12,3 +15,4 @@ chrome-profile/
 **/Login Data*
 **/Web Data*
 **/History*
+!web/templates/history.html

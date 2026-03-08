@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}History — Casino Claim{% endblock %}
+{% block content %}
+<h1>Run history</h1>
+<div class="card">
+    {% if runs %}
+    {% for r in runs %}
+    <p>
+        <span class="badge {% if r.status == 'success' %}badge-success{% elif r.status == 'error' %}badge-error{% else %}badge-info{% endif %}">{{ r.status }}</span>
+        <strong>{{ r.casino_key }}</strong> — {{ (r.message or '—')[:200] }}
+        <br><small>{{ r.created_at }}</small>
+    </p>
+    {% endfor %}
+    {% else %}
+    <p>No runs yet. Start the loop or use <strong>Run now</strong> on the <a href="/dashboard">dashboard</a>.</p>
+    {% endif %}
+</div>
+<p><a href="/dashboard">Back to dashboard</a></p>
+{% endblock %}

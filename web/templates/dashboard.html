@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Casino Claim{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+{% if msg %}<p class="success">{{ msg }}</p>{% endif %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<div class="card">
+    <h2 style="margin-top: 0;">Status</h2>
+    <p><strong>Loop:</strong> {{ 'On' if loop_enabled else 'Off' }}</p>
+    <p><strong>Universal casinos:</strong> {{ universal_casino_count }}</p>
+    <div style="display: flex; gap: 0.5rem;">
+        {% if not loop_enabled %}
+        <form method="post" action="/loop/start" style="display: inline;">
+            <button type="submit" class="btn btn-success">Start loop</button>
+        </form>
+        {% else %}
+        <form method="post" action="/loop/stop" style="display: inline;">
+            <button type="submit" class="btn btn-danger">Stop loop</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if pending_2fa %}
+<div class="card">
+    <h2 style="margin-top: 0;">2FA required</h2>
+    <p>Enter 2FA code for {{ pending_2fa.casino_name or 'this casino' }}.</p>
+    <form method="post" action="/2fa">
+        <div class="form-group">
+            <label for="code">Code</label>
+            <input type="text" id="code" name="code" placeholder="6 digits" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
+        </div>
+        <button type="submit" class="btn">Submit</button>
+    </form>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2 style="margin-top: 0;">Run now</h2>
+    <p>Run a single casino claim now (uses your profile credentials).</p>
+    <form method="post" action="/run">
+        <div class="form-group">
+            <label for="casino_key">Casino</label>
+            <select id="casino_key" name="casino_key" required>
+                <option value="">— Select —</option>
+                {% for c in casino_choices %}
+                <option value="{{ c.lower() }}">{{ c }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn">Run now</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2 style="margin-top: 0;">Recent runs</h2>
+    {% if recent_runs %}
+    {% for r in recent_runs %}
+    <p>
+        <span class="badge {% if r.status == 'success' %}badge-success{% elif r.status == 'error' %}badge-error{% else %}badge-info{% endif %}">{{ r.status }}</span>
+        {{ r.casino_key }}: {{ (r.message or '')[:80] }}
+        <small>{{ r.created_at }}</small>
+    </p>
+    {% endfor %}
+    <p><a href="/history">View full history</a></p>
+    {% else %}
+    <p>No runs yet. Start the loop or use <strong>Run now</strong> above.</p>
+    {% endif %}
+</div>
+{% endblock %}

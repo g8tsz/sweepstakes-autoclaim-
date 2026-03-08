@@ -15,3 +15,9 @@ pillow
 pytesseract
 opencv-python-headless
 brotli
+# Optional: for PROFILE_ENCRYPTION_KEY (encrypt user_profiles.json)
+cryptography
+# Web app
+fastapi
+uvicorn[standard]
+jinja2

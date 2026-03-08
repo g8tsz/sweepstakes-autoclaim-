@@ -19,6 +19,12 @@ Casino Claim is a discord bot for claiming social casino bonuses. The bot will a
 # DISCLAIMER 
 I am not responsible for any financial loss or gain incurred with the use of this tool. I have no relationship with any business or website. This tool is for educational purposes only and is provided as is with no warranty.
 
+# Security
+- **Credentials**: `.env` and `user_profiles.json` contain sensitive data (tokens, passwords). Restrict file permissions (e.g. `chmod 600`), do not commit them to version control, and avoid sharing or backing them up to untrusted locations.
+- **Discord**: Use a dedicated private channel for the bot (`DISCORD_CHANNEL`) so only intended users can trigger claims and see output.
+- **Optional encryption**: Set `PROFILE_ENCRYPTION_KEY` to a Fernet key (from `cryptography.fernet.Fernet.generate_key()`) to encrypt `user_profiles.json` on disk. Requires the `cryptography` package.
+- **Audit**: Set `PROFILE_AUDIT_LOG` to a file path to log profile actions (user id + action, no credentials).
+
 # Having an Issue? 
 For direct support, feature/casino requests, and community access, please sponsor me below and I will help you on Discord (exclusive to Sponsors and Contributors only).
 
@@ -46,8 +52,39 @@ cd sweepstakes-autoclaim-
 
 
 # Usage 
-The bot is designed to check most casinos automatically in 2-hour intervals, with commands to check status of bonus. Some casinos only check once every 24 hours, but this can be changed with `!config` command.`!start` and `!stop` will start and stop the main loop. Running `!help` at any time provides the available commands. `!cleardatadir` command is useful for sites giving location issues, as well as sites you need to re-authenticate with.
- 
+The bot is designed to check most casinos automatically in 2-hour intervals, with commands to check status of bonus. Some casinos only check once every 24 hours, but this can be changed with `!config` command. `!start` and `!stop` will start and stop the main loop. Running `!help` at any time provides the available commands. `!cleardatadir` command is useful for sites giving location issues, as well as sites you need to re-authenticate with.
+
+## Slash commands (/) and /profile
+You can use **slash commands** instead of `!` prefix:
+
+- **`/start`**, **`/stop`** — Start or stop the automated casino loop.
+- **`/profile`** — Set or view your credentials (stored per user in `user_profiles.json`):
+  - **`/profile set_google`** — Set your Google email and password (for universal casinos, Stake, Fortune Coins).
+  - **`/profile set_casino`** — Set credentials for a casino (e.g. STAKE, CHANCED). Format: `username:password`. Use **`/profile list_casinos`** for valid names.
+  - **`/profile list_casinos`** — List casino names you can use with `set_casino`.
+  - **`/profile view`** — View your saved profile (passwords masked).
+  - **`/profile clear`** — Clear google, one casino, or all.
+- **`/universal <key>`** — Run a universal casino by key (uses your `/profile` Google login if set).
+- **`/status`** — Show loop status, next run times, and universal casino count.
+- **`/help`** — Short help.
+
+The automated loop uses `.env` (e.g. `GOOGLE_LOGIN`) unless **`DEFAULT_PROFILE_USER_ID`** is set (Discord user ID). When set, the loop uses that user's `/profile` Google credentials for universal casinos. Your `/profile` credentials are also used when you run **`/universal`** or **`!universal`**.
+
+## Universal casinos (any site with Google login)
+You can support **any casino that offers “Sign in with Google”** without writing a new Python API. The bot loads config from **`casinos_universal.json`** and runs a generic flow: open site → click Google login (if needed) → claim daily bonus → optional countdown.
+
+- Set **`GOOGLE_LOGIN=your@gmail.com:yourpassword`** in `.env` and run **`!auth google`** once (or use a persistent Chrome profile so the session is reused).
+- Universal casinos are added to the main loop automatically. Manual check: **`!universal <key>`** (e.g. `!universal wowvegas`).
+- To add a new casino: edit **`casinos_universal.json`** and add an entry with `key`, `name`, `base_url`, `use_google_login`, `google_btn_selectors`, `claim_selectors`, and optional `countdown_selector`. See the existing entries for the format. No code change required.
+
+## Web app (browser UI)
+A **web interface** provides the same automation without Discord: sign up, set Google and casino credentials, start/stop the loop, run a casino now, and submit 2FA in the browser when prompted. From the project root:
+
+```bash
+uvicorn web.app:app --reload --host 0.0.0.0 --port 8000
+```
+
+Then open http://localhost:8000. See **`web/README.md`** for env vars and API details.
 
 
 # Supported Casinos 

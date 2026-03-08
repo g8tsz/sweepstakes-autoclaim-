@@ -6,6 +6,7 @@ import os
 import glob
 import re
 import time
+import logging
 import discord
 import asyncio
 import importlib
@@ -15,6 +16,9 @@ from typing import Awaitable, Callable, List, Optional
 
 from dotenv import load_dotenv
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger(__name__)
+
 # ───────────────────────────────────────────────────────────
 # Selenium / Chrome
 # ───────────────────────────────────────────────────────────
@@ -22,13 +26,13 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import SessionNotCreatedException
 
 # Discord
 from discord import Intents
 from discord.ext import commands
+from discord import app_commands
 
 # (other modules may use these; imports are harmless here)
 import undetected_chromedriver as uc  # noqa: F401
@@ -87,14 +91,20 @@ for module_name in api_modules:
         module = importlib.import_module(module_name)
         globals().update(vars(module))
     except Exception as e:
-        print(f"Warning: Failed to import {module_name}: {e}")
+        log.warning("Failed to import %s: %s", module_name, e)
 
 # ───────────────────────────────────────────────────────────
 # Env & Discord setup
 # ───────────────────────────────────────────────────────────
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DISCORD_CHANNEL = int(os.getenv("DISCORD_CHANNEL"))
+_raw_channel = (os.getenv("DISCORD_CHANNEL") or "").strip()
+try:
+    DISCORD_CHANNEL = int(_raw_channel) if _raw_channel else 0
+except ValueError:
+    DISCORD_CHANNEL = 0
+if not DISCORD_CHANNEL and DISCORD_TOKEN:
+    log.warning("DISCORD_CHANNEL is missing or invalid; slash commands may allow all channels.")
 
 intents = Intents.default()
 intents.message_content = True
@@ -102,10 +112,8 @@ intents.message_content = True
 # ───────────────────────────────────────────────────────────
 # Selenium driver (headed; Xvfb is started by entrypoint.sh)
 # ───────────────────────────────────────────────────────────
-caps = DesiredCapabilities.CHROME
-caps["goog:loggingPrefs"] = {"performance": "ALL"}
-
 options = Options()
+options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
 instance_dir = os.getenv("CHROME_INSTANCE_DIR", "").strip()
 profile_dir = os.getenv("CHROME_PROFILE_DIR", "Default").strip()
@@ -156,23 +164,22 @@ def _apply_common_chrome_flags(opts: Options) -> None:
     ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
     opts.add_argument(f"--user-agent={ua}")
-    opts.set_capability("goog:loggingPrefs", caps["goog:loggingPrefs"])
 
 # Persistent profile (prefer CHROME_INSTANCE_DIR)
 if instance_dir:
-    print(f"[Chrome] Profile Root: {instance_dir}  Profile Dir: {profile_dir}")
+    log.info("Chrome profile root: %s  profile dir: %s", instance_dir, profile_dir)
     _clean_chrome_locks(instance_dir, profile_dir)
     options.add_argument(f"--user-data-dir={instance_dir}")
     options.add_argument(f"--profile-directory={profile_dir}")
 else:
     user_data_root = os.getenv("CHROME_USER_DATA_DIR", "").strip()
     if user_data_root:
-        print(f"[Chrome] Profile Root: {user_data_root}  Profile Dir: {profile_dir}")
+        log.info("Chrome profile root: %s  profile dir: %s", user_data_root, profile_dir)
         _clean_chrome_locks(user_data_root, profile_dir)
         options.add_argument(f"--user-data-dir={user_data_root}")
         options.add_argument(f"--profile-directory={profile_dir}")
     else:
-        print("[Chrome] No persistent profile configured (ephemeral session).")
+        log.info("Chrome: no persistent profile configured (ephemeral session).")
 
 # Optional CRX
 crx_path = "/temp/CAPTCHA-Solver-auto-hCAPTCHA-reCAPTCHA-freely-Chrome-Web-Store.crx"
@@ -191,7 +198,7 @@ def _build_driver_with_retry(opts: Options):
             root = instance_dir or os.getenv("CHROME_USER_DATA_DIR", "").strip()
             prof = profile_dir
             if root:
-                print("[Chrome] Retrying after force-unlock of profile…")
+                log.info("Chrome: retrying after force-unlock of profile.")
                 _clean_chrome_locks(root, prof)
                 time.sleep(1.0)
                 return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
@@ -204,6 +211,43 @@ driver = _build_driver_with_retry(options)
 # ───────────────────────────────────────────────────────────
 bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 bot.remove_command("help")
+
+# Per-user profiles for /profile (Google + casino credentials)
+import profiles as user_profiles
+
+# Rate limit for /profile set_google and set_casino (per user, per minute)
+PROFILE_RATE_LIMIT_PER_MINUTE = int(os.getenv("PROFILE_RATE_LIMIT_PER_MINUTE", "5"))
+_profile_rate_ts: dict = {}
+_profile_rate_lock = threading.Lock()
+
+def _profile_rate_limit_check(user_id: int) -> bool:
+    """Return True if user is over rate limit (should reject). On allow, records this request."""
+    with _profile_rate_lock:
+        now = time.time()
+        key = str(user_id)
+        if key not in _profile_rate_ts:
+            _profile_rate_ts[key] = []
+        cutoff = now - 60
+        _profile_rate_ts[key] = [t for t in _profile_rate_ts[key] if t > cutoff]
+        if len(_profile_rate_ts[key]) >= PROFILE_RATE_LIMIT_PER_MINUTE:
+            return True
+        _profile_rate_ts[key].append(now)
+        return False
+
+# Embed theme for slash commands (green, blue, amber, red)
+EMBED_COLOR_SUCCESS = 0x22C55E
+EMBED_COLOR_INFO    = 0x3B82F6
+EMBED_COLOR_WARN    = 0xF59E0B
+EMBED_COLOR_ERROR   = 0xEF4444
+
+def embed_message(title: str, description: str = None, color: int = EMBED_COLOR_INFO, fields: List[dict] = None, footer: str = "Casino Claim") -> discord.Embed:
+    e = discord.Embed(title=title, description=description or "", color=color)
+    if fields:
+        for f in fields:
+            e.add_field(name=f.get("name", "\u200b"), value=f.get("value", "\u200b"), inline=f.get("inline", True))
+    e.set_footer(text=footer)
+    e.timestamp = dt.datetime.now(dt.timezone.utc)
+    return e
 
 bot.awaiting_2fa_for = None
 bot.pending_2fa_code = None
@@ -223,21 +267,37 @@ async def on_message(message: discord.Message):
                     bot._pending_2fa_event.set()
             else:
                 bot.two_fa_code = text  # legacy fallback
-                print(f"[2FA] Stored code (legacy): {bot.two_fa_code}")
+                log.info("2FA: stored code (legacy)")
     await bot.process_commands(message)
 
-async def wait_for_2fa(site_name: str, timeout: int = 90) -> Optional[str]:
+async def wait_for_2fa(site_name: str, timeout: int = 90, channel: Optional[discord.abc.Messageable] = None) -> Optional[str]:
     if bot.awaiting_2fa_for:
         return None
     bot.awaiting_2fa_for = site_name
     bot.pending_2fa_code = None
     bot._pending_2fa_event = asyncio.Event()
+    if channel:
+        try:
+            emb = embed_message("2FA required", f"Reply in this channel with your **{site_name}** 2FA code (5–8 digits) within {timeout}s.", EMBED_COLOR_WARN)
+            await channel.send(embed=emb)
+        except Exception:
+            pass
     try:
         await asyncio.wait_for(bot._pending_2fa_event.wait(), timeout=timeout)
     except asyncio.TimeoutError:
         code = None
+        if channel:
+            try:
+                await channel.send(embed=embed_message("2FA timeout", f"No 2FA code received for **{site_name}** in time.", EMBED_COLOR_ERROR))
+            except Exception:
+                pass
     else:
         code = bot.pending_2fa_code
+        if channel and code:
+            try:
+                await channel.send(embed=embed_message("2FA received", f"Code received for **{site_name}**.", EMBED_COLOR_SUCCESS))
+            except Exception:
+                pass
     bot.awaiting_2fa_for = None
     bot.pending_2fa_code = None
     bot._pending_2fa_event = asyncio.Event()
@@ -325,6 +385,42 @@ casino_loop_entries: List[CasinoLoopEntry] = [
 
 ]
 
+# Universal casinos (config-driven from casinos_universal.json; Google login)
+UNIVERSAL_CASINO_KEYS: List[str] = []
+try:
+    from universal_casinoAPI import universal_casino_flow, load_universal_casinos_config
+    _universal_configs = load_universal_casinos_config()
+    for cfg in _universal_configs:
+        key = (cfg.get("key") or cfg.get("name", "")).lower().replace(" ", "")
+        if not key:
+            continue
+        display = cfg.get("name", key)
+        interval = float(cfg.get("interval_minutes", 1440))
+        UNIVERSAL_CASINO_KEYS.append(key)
+
+        def _make_universal_runner(config_copy):
+            async def _run(channel):
+                run_config = dict(config_copy)
+                default_uid = (os.getenv("DEFAULT_PROFILE_USER_ID") or "").strip()
+                if default_uid:
+                    try:
+                        uid_int = int(default_uid)
+                        creds = user_profiles.get_google_credentials(uid_int)
+                        if creds:
+                            run_config["_user_google"] = creds
+                    except Exception:
+                        pass
+                return await universal_casino_flow(driver, bot, channel, run_config, None)
+            return _run
+
+        casino_loop_entries.append(
+            CasinoLoopEntry(key, display, _make_universal_runner(dict(cfg)), interval)
+        )
+    if _universal_configs:
+        log.info("Universal: loaded %s casino(s) from config.", len(_universal_configs))
+except Exception as e:
+    log.warning("Universal: failed to load config: %s", e)
+
 def reset_loop_schedule():
     base = dt.datetime.now(dt.timezone.utc)
     for i, entry in enumerate(casino_loop_entries):
@@ -347,12 +443,12 @@ async def run_main_loop(channel: discord.abc.Messageable):
                         await asyncio.wait_for(entry.runner(channel), timeout=PER_CASINO_TIMEOUT_SEC)
                     except asyncio.TimeoutError:
                         try:
-                            await channel.send(f" {entry.display_name} timed out after {PER_CASINO_TIMEOUT_SEC}s. Skipping.")
+                            await channel.send(embed=embed_message(f"{entry.display_name} — Timeout", f"Timed out after {PER_CASINO_TIMEOUT_SEC}s. Skipping.", EMBED_COLOR_WARN))
                         except Exception:
                             pass
-                        print(f"[Loop] {entry.display_name} timed out.")
+                        log.warning("Loop: %s timed out.", entry.display_name)
                     except Exception as e:
-                        print(f"[Loop] Error in {entry.display_name}: {e}")
+                        log.warning("Loop: error in %s: %s", entry.display_name, e)
                     finally:
                         entry.schedule_next()
             await asyncio.sleep(MAIN_TICK_SLEEP)
@@ -368,7 +464,7 @@ async def start_main_loop(channel: Optional[discord.abc.Messageable] = None) -> 
     if channel is None:
         channel = bot.get_channel(DISCORD_CHANNEL)
     if channel is None:
-        print("[Loop] Cannot start, channel not found.")
+        log.warning("Loop: cannot start, channel not found.")
         return False
     reset_loop_schedule()
     main_loop_running = True
@@ -429,25 +525,299 @@ async def stop_main_loop() -> bool:
 # ───────────────────────────────────────────────────────────
 # Commands
 # ───────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────
+# Slash commands (/) and /profile
+# ───────────────────────────────────────────────────────────
+profile_group = app_commands.Group(name="profile", description="Set or view your Google and casino credentials")
+
+@profile_group.command(name="set_google", description="Set your Google login (email and password) for universal casinos and Stake/Fortune Coins")
+@app_commands.describe(email="Your Google email", password="Your Google password")
+async def profile_set_google_slash(interaction: discord.Interaction, email: str, password: str):
+    if not _slash_channel_check(interaction):
+        await _slash_channel_fail(interaction)
+        return
+    if _profile_rate_limit_check(interaction.user.id):
+        emb = embed_message("Rate limited", f"You can only run profile updates {PROFILE_RATE_LIMIT_PER_MINUTE} times per minute. Try again shortly.", EMBED_COLOR_WARN)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+        return
+    email = (email or "").strip()
+    password = (password or "").strip()
+    if not email or not password:
+        emb = embed_message("Missing input", "Please provide both email and password.", EMBED_COLOR_ERROR)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+        return
+    user_profiles.set_google(interaction.user.id, email, password)
+    emb = embed_message(
+        "Google login saved",
+        f"Credentials have been stored for **{interaction.user.display_name}**.",
+        EMBED_COLOR_SUCCESS,
+        fields=[{"name": "Email", "value": f"`{email}`", "inline": True}, {"name": "Password", "value": "••••••••", "inline": True}, {"name": "Tip", "value": "Use `/profile view` to confirm. Your password is stored securely.", "inline": False}],
+    )
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@profile_group.command(name="set_casino", description="Set credentials for a specific casino (e.g. STAKE, CHANCED). Format: username:password")
+@app_commands.describe(casino_name="Casino name (e.g. STAKE, CHANCED, FORTUNECOINS)", credentials="username:password")
+async def profile_set_casino_slash(interaction: discord.Interaction, casino_name: str, credentials: str):
+    if not _slash_channel_check(interaction):
+        await _slash_channel_fail(interaction)
+        return
+    if _profile_rate_limit_check(interaction.user.id):
+        emb = embed_message("Rate limited", f"You can only run profile updates {PROFILE_RATE_LIMIT_PER_MINUTE} times per minute. Try again shortly.", EMBED_COLOR_WARN)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+        return
+    casino_name = (casino_name or "").strip()
+    credentials = (credentials or "").strip()
+    if not casino_name or not credentials:
+        emb = embed_message("Missing input", "Please provide casino name and credentials (username:password).", EMBED_COLOR_ERROR)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+        return
+    user_profiles.set_casino(interaction.user.id, casino_name, credentials)
+    user = credentials.split(":", 1)[0] if ":" in credentials else "•••"
+    emb = embed_message(
+        "Casino credentials saved",
+        f"**{casino_name}** has been linked to your profile.",
+        EMBED_COLOR_SUCCESS,
+        fields=[{"name": "Casino", "value": casino_name, "inline": True}, {"name": "Username", "value": f"`{user}`", "inline": True}, {"name": "User", "value": interaction.user.display_name, "inline": False}],
+    )
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+# Casino names users can pass to /profile set_casino (universal keys + known API casinos)
+KNOWN_CASINO_NAMES_FOR_PROFILE: List[str] = sorted(
+    set(k.upper() for k in UNIVERSAL_CASINO_KEYS)
+    | {
+        "STAKE", "CHANCED", "FORTUNECOINS", "MODO", "CROWNCOINS", "CHUMBA", "GLOBALPOKER",
+        "JEFEBET", "SPINPALS", "SPINQUEST", "FUNRIZE", "REALPRIZE", "DINGDINGDING", "SPORTZINO",
+        "NOLIMITCOINS", "SMILESCASINO", "JUMBO", "YAYCASINO", "LUCKYLAND", "LUCKYBIRD",
+        "FORTUNEWHEELZ", "AMERICANLUCK", "ROLLINGRICHES",
+    }
+)
+
+@profile_group.command(name="list_casinos", description="List casino names you can use with /profile set_casino")
+async def profile_list_casinos_slash(interaction: discord.Interaction):
+    names = ", ".join(f"`{n}`" for n in KNOWN_CASINO_NAMES_FOR_PROFILE[:50])
+    if len(KNOWN_CASINO_NAMES_FOR_PROFILE) > 50:
+        names += f" … and {len(KNOWN_CASINO_NAMES_FOR_PROFILE) - 50} more"
+    emb = embed_message(
+        "Casino names for /profile set_casino",
+        "Use these (case-insensitive) with `/profile set_casino <name> username:password`.",
+        EMBED_COLOR_INFO,
+        fields=[{"name": "Names", "value": names or "*None*", "inline": False}],
+    )
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@profile_group.command(name="view", description="View your saved profile (masks passwords)")
+async def profile_view_slash(interaction: discord.Interaction):
+    prof = user_profiles.get_profile(interaction.user.id)
+    if not prof:
+        emb = embed_message(
+            "No profile yet",
+            "You don't have any saved credentials. Add them to use universal casinos and casino-specific logins.",
+            EMBED_COLOR_INFO,
+            fields=[
+                {"name": "Google login", "value": "`/profile set_google`", "inline": True},
+                {"name": "Casino login", "value": "`/profile set_casino`", "inline": True},
+            ],
+        )
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+        return
+    google_val = "`" + prof["google_login"].split(":", 1)[0] + "` (password set)" if prof.get("google_login") else "*Not set*"
+    casino_val = ", ".join(f"`{k}`" for k in (prof.get("casino") or {}).keys()) or "*None*"
+    emb = embed_message(
+        f"Profile — {interaction.user.display_name}",
+        "Your saved credentials (passwords are never shown).",
+        EMBED_COLOR_INFO,
+        fields=[
+            {"name": "Google", "value": google_val, "inline": True},
+            {"name": "Casinos", "value": casino_val, "inline": True},
+            {"name": "Manage", "value": "`/profile set_google` · `/profile set_casino` · `/profile clear`", "inline": False},
+        ],
+    )
+    thumb = getattr(interaction.user, "display_avatar", None) or getattr(interaction.user, "avatar", None)
+    if thumb:
+        emb.set_thumbnail(url=thumb.url)
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@profile_group.command(name="clear", description="Clear your saved credentials")
+@app_commands.describe(what="What to clear", casino_name="Casino name when clearing one casino (optional)")
+@app_commands.choices(what=[
+    app_commands.Choice(name="google", value="google"),
+    app_commands.Choice(name="casino", value="casino"),
+    app_commands.Choice(name="all", value="all"),
+])
+async def profile_clear_slash(interaction: discord.Interaction, what: app_commands.Choice[str], casino_name: str = None):
+    w = what.value if hasattr(what, "value") else what
+    if w == "google":
+        ok = user_profiles.clear_google(interaction.user.id)
+        title = "Google credentials cleared" if ok else "Nothing to clear"
+        desc = "Your Google login has been removed from your profile." if ok else "You had no Google credentials saved."
+        emb = embed_message(title, desc, EMBED_COLOR_SUCCESS if ok else EMBED_COLOR_WARN)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+    elif w == "casino":
+        ok = user_profiles.clear_casino(interaction.user.id, casino_name)
+        title = "Casino credentials cleared" if ok else "Not found"
+        desc = (f"Cleared **{casino_name}**." if casino_name else "Cleared all casino credentials.") if ok else "No matching casino credentials found."
+        emb = embed_message(title, desc, EMBED_COLOR_SUCCESS if ok else EMBED_COLOR_WARN)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+    else:  # all
+        ok = user_profiles.clear_all(interaction.user.id)
+        title = "Profile cleared" if ok else "Nothing to clear"
+        desc = "All your saved credentials have been removed." if ok else "You had no profile saved."
+        emb = embed_message(title, desc, EMBED_COLOR_SUCCESS if ok else EMBED_COLOR_WARN)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
+bot.tree.add_command(profile_group)
+
+def _slash_channel_check(interaction: discord.Interaction) -> bool:
+    """Return True if command is allowed in this channel (for slash commands)."""
+    if not DISCORD_CHANNEL:
+        return True
+    return interaction.channel_id == DISCORD_CHANNEL
+
+async def _slash_channel_fail(interaction: discord.Interaction):
+    emb = embed_message("Wrong channel", "Use this command in the configured casino channel.", EMBED_COLOR_WARN)
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@bot.tree.command(name="start", description="Start the automated casino claim loop")
+async def start_slash(interaction: discord.Interaction):
+    if not _slash_channel_check(interaction):
+        await _slash_channel_fail(interaction)
+        return
+    started = await start_main_loop()
+    if started:
+        emb = embed_message("Loop started", "The automated casino claim loop is now running. Bonuses will be checked on schedule.", EMBED_COLOR_SUCCESS)
+        await interaction.response.send_message(embed=emb)
+    elif is_main_loop_running():
+        emb = embed_message("Already running", "The casino loop is already active. Use `/stop` to stop it first.", EMBED_COLOR_WARN)
+        await interaction.response.send_message(embed=emb)
+    else:
+        emb = embed_message("Could not start", "Channel missing or invalid. Check bot configuration.", EMBED_COLOR_ERROR)
+        await interaction.response.send_message(embed=emb)
+
+@bot.tree.command(name="stop", description="Stop the automated casino claim loop")
+async def stop_slash(interaction: discord.Interaction):
+    stopped = await stop_main_loop()
+    if stopped:
+        emb = embed_message("Loop stopped", "The automated loop has been stopped. You can run manual casino commands now.", EMBED_COLOR_SUCCESS)
+        await interaction.response.send_message(embed=emb)
+    else:
+        emb = embed_message("Not running", "The casino loop was not running.", EMBED_COLOR_INFO)
+        await interaction.response.send_message(embed=emb)
+
+@bot.tree.command(name="help", description="List bot commands and usage")
+async def help_slash(interaction: discord.Interaction):
+    emb = embed_message(
+        "Casino Claim — Help",
+        "Never miss a casino bonus. Set your credentials with `/profile` and control the loop with `/start` and `/stop`.",
+        EMBED_COLOR_INFO,
+        fields=[
+            {"name": "Slash commands", "value": "`/start` · `/stop` · `/profile` (set_google, set_casino, list_casinos, view, clear) · `/universal <key>` · `/status` · `/help`", "inline": False},
+            {"name": "Prefix commands", "value": "`!start` · `!stop` · `!auth google` · `!universal <key>` · `!help` · and all casino commands (e.g. `!stake`)", "inline": False},
+            {"name": "Getting started", "value": "1. `/profile set_google` — add your Google login\n2. `/profile set_casino` — add any casino (e.g. STAKE)\n3. `/start` — start the auto loop", "inline": False},
+        ],
+    )
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+@bot.tree.command(name="universal", description="Check a universal (config-driven) casino by key")
+@app_commands.describe(key="Casino key from casinos_universal.json (e.g. wowvegas, high5casino)")
+async def universal_slash(interaction: discord.Interaction, key: str):
+    if not _slash_channel_check(interaction):
+        await _slash_channel_fail(interaction)
+        return
+    key = (key or "").lower().strip()
+    if key not in UNIVERSAL_CASINO_KEYS:
+        avail = ", ".join(UNIVERSAL_CASINO_KEYS) if UNIVERSAL_CASINO_KEYS else "none (add entries to casinos_universal.json)"
+        emb = embed_message("Unknown key", f"Available keys: **{avail}**", EMBED_COLOR_WARN, fields=[{"name": "Example", "value": "`/universal wowvegas`", "inline": False}])
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+        return
+    try:
+        from universal_casinoAPI import universal_casino_flow, load_universal_casinos_config
+        configs = load_universal_casinos_config()
+        cfg = next((c for c in configs if (c.get("key") or c.get("name", "").lower().replace(" ", "")) == key), None)
+        if not cfg:
+            emb = embed_message("Config not found", f"No config for key `{key}`.", EMBED_COLOR_ERROR)
+            await interaction.response.send_message(embed=emb, ephemeral=True)
+            return
+        name = cfg.get("name", key)
+        emb = embed_message(
+            f"Checking {name}",
+            "The bot is opening the site and will try to claim. Uses your `/profile` Google login if set.",
+            EMBED_COLOR_INFO,
+            fields=[{"name": "Casino", "value": name, "inline": True}, {"name": "Key", "value": key, "inline": True}],
+        )
+        await interaction.response.send_message(embed=emb)
+        channel = bot.get_channel(DISCORD_CHANNEL)
+        creds = user_profiles.get_google_credentials(interaction.user.id)
+        if creds:
+            cfg = dict(cfg)
+            cfg["_user_google"] = creds
+        await universal_casino_flow(driver, bot, channel, cfg, None)
+    except Exception as e:
+        err_emb = embed_message("Error", str(e)[:500], EMBED_COLOR_ERROR)
+        try:
+            await interaction.response.send_message(embed=err_emb, ephemeral=True)
+        except discord.errors.InteractionResponded:
+            await interaction.followup.send(embed=err_emb, ephemeral=True)
+        except Exception:
+            pass
+
+@bot.tree.command(name="status", description="Show bot status: loop, next runs, universal casinos")
+async def status_slash(interaction: discord.Interaction):
+    if not _slash_channel_check(interaction):
+        await _slash_channel_fail(interaction)
+        return
+    running = is_main_loop_running()
+    now = dt.datetime.now(dt.timezone.utc)
+    next_runs: List[str] = []
+    for entry in casino_loop_entries[:15]:
+        delta = (entry.next_run - now).total_seconds()
+        if delta <= 0:
+            next_runs.append(f"**{entry.display_name}**: due now")
+        else:
+            mins = int(delta // 60)
+            next_runs.append(f"**{entry.display_name}**: in {mins}m")
+    if len(casino_loop_entries) > 15:
+        next_runs.append(f"… and {len(casino_loop_entries) - 15} more")
+    emb = embed_message(
+        "Casino Claim — Status",
+        "Loop and schedule overview.",
+        EMBED_COLOR_SUCCESS if running else EMBED_COLOR_INFO,
+        fields=[
+            {"name": "Loop", "value": "Running" if running else "Stopped", "inline": True},
+            {"name": "Universal casinos", "value": str(len(UNIVERSAL_CASINO_KEYS)), "inline": True},
+            {"name": "Next runs", "value": "\n".join(next_runs) if next_runs else "—", "inline": False},
+        ],
+    )
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
 @bot.event
 async def on_ready():
-    print(f"Bot has connected as {bot.user}")
+    guild_id_str = (os.getenv("DISCORD_GUILD_ID") or "").strip()
+    try:
+        if guild_id_str:
+            guild_id = int(guild_id_str)
+            await bot.tree.sync(guild=discord.Object(id=guild_id))
+            log.info("Slash commands synced to guild %s", guild_id)
+        else:
+            await bot.tree.sync()
+            log.info("Slash commands synced (global).")
+    except Exception as e:
+        log.warning("Slash sync failed: %s", e)
+    log.info("Bot connected as %s", bot.user)
     channel = bot.get_channel(DISCORD_CHANNEL)
     if channel:
-        await channel.send("Discord bot has started…")
+        await channel.send(embed=embed_message("Bot started", "Discord bot has started. Loop will start shortly if configured.", EMBED_COLOR_SUCCESS))
         await asyncio.sleep(10)
         if await start_main_loop(channel):
-            await channel.send(" Casino loop started with current configuration.")
-        # Start the background Modo refresher; it will only act when the loop is stopped.
-        # asyncio.create_task(modo_auth_maintenance())
+            await channel.send(embed=embed_message("Loop started", "Casino loop started with current configuration.", EMBED_COLOR_SUCCESS))
     else:
-        print("Invalid DISCORD_CHANNEL")
+        log.warning("DISCORD_CHANNEL invalid or channel not found.")
 
 MANUAL_CASINO_COMMANDS = {
     "chumba","rollingriches","jefebet","spinpals","spinquest","funrize",
     "fortunewheelz","stake","chanced","luckybird","globalpoker","crowncoins",
     "dingdingding","modo","zula","sportzino","nolimitcoins","fortunecoins",
     "smilescasino","americanluck","yaycasino", "realprize", "jumbo",
+    *UNIVERSAL_CASINO_KEYS,
 }
 
 @bot.check
@@ -455,7 +825,7 @@ async def prevent_manual_casino_commands(ctx: commands.Context) -> bool:
     if ctx.command is None:
         return True
     if is_main_loop_running() and ctx.command.name.lower() in MANUAL_CASINO_COMMANDS:
-        await ctx.send("The automated casino loop is running. Use `!stop` before manually checking casinos.")
+        await ctx.send(embed=embed_message("Loop running", "The automated casino loop is running. Use `!stop` or `/stop` before manually checking casinos.", EMBED_COLOR_WARN))
         return False
     return True
 
@@ -463,19 +833,19 @@ async def prevent_manual_casino_commands(ctx: commands.Context) -> bool:
 async def start_loop_command(ctx: commands.Context):
     started = await start_main_loop()
     if started:
-        await ctx.send("Casino loop started.")
+        await ctx.send(embed=embed_message("Loop started", "Casino loop started. Bonuses will be checked on schedule.", EMBED_COLOR_SUCCESS))
     elif is_main_loop_running():
-        await ctx.send("Casino loop is already running.")
+        await ctx.send(embed=embed_message("Already running", "Casino loop is already running. Use `!stop` or `/stop` first.", EMBED_COLOR_WARN))
     else:
-        await ctx.send("Casino loop could not start (channel missing).")
+        await ctx.send(embed=embed_message("Could not start", "Casino loop could not start (channel missing). Check bot configuration.", EMBED_COLOR_ERROR))
 
 @bot.command(name="stop")
 async def stop_loop_command(ctx: commands.Context):
     stopped = await stop_main_loop()
     if stopped:
-        await ctx.send("Casino loop stopped. You can run manual casino commands now.")
+        await ctx.send(embed=embed_message("Loop stopped", "Casino loop stopped. You can run manual casino commands now.", EMBED_COLOR_SUCCESS))
     else:
-        await ctx.send("Casino loop is not currently running.")
+        await ctx.send(embed=embed_message("Not running", "Casino loop is not currently running.", EMBED_COLOR_INFO))
 
 
 @bot.command(name="cleardatadir")
@@ -1183,6 +1553,34 @@ async def dingdingding_cmd(ctx):
     if not claimed:
         await check_dingdingding_countdown(driver, bot, ctx, channel)
 
+
+@bot.command(name="universal", aliases=["u"])
+async def universal_casino_cmd(ctx: commands.Context, key: str = None):
+    """Run a universal (config-driven) casino by key. Keys from casinos_universal.json."""
+    if not key:
+        if UNIVERSAL_CASINO_KEYS:
+            await ctx.send(f"Usage: `!universal <key>` — keys: {', '.join(UNIVERSAL_CASINO_KEYS)}")
+        else:
+            await ctx.send("No universal casinos loaded. Add entries to casinos_universal.json.")
+        return
+    key = key.lower().strip()
+    if key not in UNIVERSAL_CASINO_KEYS:
+        await ctx.send(f"Unknown universal casino `{key}`. Keys: {', '.join(UNIVERSAL_CASINO_KEYS)}")
+        return
+    try:
+        from universal_casinoAPI import universal_casino_flow, load_universal_casinos_config
+        configs = load_universal_casinos_config()
+        cfg = next((c for c in configs if (c.get("key") or c.get("name", "").lower().replace(" ", "")) == key), None)
+        if not cfg:
+            await ctx.send(f"Config for `{key}` not found.")
+            return
+        await ctx.send(f"Checking {cfg.get('name', key)}…")
+        channel = bot.get_channel(DISCORD_CHANNEL)
+        await universal_casino_flow(driver, bot, channel, cfg, ctx)
+    except Exception as e:
+        await ctx.send(f"Error: {e}")
+
+
 # ───────────────────────────────────────────────────────────
 # AUTH ROUTER (restores !auth commands, including !auth modo)
 # ───────────────────────────────────────────────────────────
@@ -1337,7 +1735,7 @@ async def on_command_error(ctx: commands.Context, error: Exception):
         await ctx.send(f" {error}")
         return
     try:
-        print(f"[on_command_error] {type(error).__name__}: {error}")
+        log.exception("on_command_error: %s: %s", type(error).__name__, error)
     except Exception:
         pass
     await ctx.send(" An error occurred while handling that command.")
@@ -1347,26 +1745,17 @@ async def on_command_error(ctx: commands.Context, error: Exception):
 # ───────────────────────────────────────────────────────────
 @bot.command(name="help")
 async def help_cmd(ctx):
-    await ctx.send("""Commands are not recommended while the casino loop is running.
-
- **Casino Commands:**  
-!chanced, !luckybird, !globalpoker, !crowncoins, !chumba, !modo, !zula,  
-!rollingriches, !jefebet, !spinpals, !spinquest, !funrize, !sportzino,  
-!fortunecoins, !nolimitcoins, !fortunewheelz, !stake, !dingdingding,
-!smilescasino, !yaycasino, !realprize, !luckyland, !jumbo,
-
----------------------------------------  
- **Auth Commands:**  
-!auth google  
-!auth modo  
-!auth crowncoins google | !auth crowncoins env  
-!auth nolimitcoins google | !auth nolimitcoins env  
-!authmodo  (shortcut)
-
----------------------------------------  
- **General:**  
-!ping, !restart, !help, !start, !stop, !about, !config, !reset
-""")
+    emb = embed_message(
+        "Casino Claim — Help",
+        "Never miss a casino bonus. Set credentials with `/profile` and control the loop with `/start` and `/stop`.",
+        EMBED_COLOR_INFO,
+        fields=[
+            {"name": "Slash commands", "value": "`/start` · `/stop` · `/profile` (set_google, set_casino, list_casinos, view, clear) · `/universal <key>` · `/status` · `/help`", "inline": False},
+            {"name": "Prefix commands", "value": "`!start` · `!stop` · `!auth google` · `!universal <key>` · `!help` · and casino commands (e.g. `!stake`, `!chanced`)", "inline": False},
+            {"name": "Getting started", "value": "1. `/profile set_google` — add your Google login\n2. `/profile set_casino` — add a casino (use `/profile list_casinos` for names)\n3. `/start` — start the auto loop", "inline": False},
+        ],
+    )
+    await ctx.send(embed=emb)
 
 # ───────────────────────────────────────────────────────────
 # Run bot

@@ -1,0 +1,49 @@
+{
+  "casinos": [
+    {
+      "key": "wowvegas",
+      "name": "WowVegas",
+      "base_url": "https://www.wowvegas.com",
+      "login_url": "https://www.wowvegas.com",
+      "claim_url": "https://www.wowvegas.com",
+      "use_google_login": true,
+      "wait_after_load_sec": 10,
+      "google_btn_selectors": [
+        { "by": "xpath", "value": "//button[contains(., 'Google') or contains(., 'google')]" },
+        { "by": "css", "value": "[data-provider='google'], .google-login, a[href*='google']" }
+      ],
+      "claim_selectors": [
+        { "by": "xpath", "value": "//button[contains(translate(., 'CLAIM', 'claim'), 'claim')]" },
+        { "by": "xpath", "value": "//a[contains(translate(., 'DAILY', 'daily'), 'daily')]" }
+      ],
+      "countdown_selector": { "by": "xpath", "value": "//*[contains(@class, 'countdown') or contains(@class, 'timer')]" }
+    },
+    {
+      "key": "high5casino",
+      "name": "High5 Casino (Sweeps)",
+      "base_url": "https://sweeps.high5casino.com",
+      "use_google_login": true,
+      "wait_after_load_sec": 10,
+      "google_btn_selectors": [
+        { "by": "xpath", "value": "//button[contains(., 'Google') or contains(., 'google')]" },
+        { "by": "css", "value": "[data-provider='google'], .google-login" }
+      ],
+      "claim_selectors": [
+        { "by": "xpath", "value": "//button[contains(translate(., 'CLAIM', 'claim'), 'claim')]" }
+      ]
+    },
+    {
+      "key": "vivaro",
+      "name": "Vivaro Lucky Wheel",
+      "base_url": "https://luckywheel.vivaro.us",
+      "use_google_login": true,
+      "wait_after_load_sec": 8,
+      "google_btn_selectors": [
+        { "by": "xpath", "value": "//button[contains(., 'Google') or contains(., 'google')]" }
+      ],
+      "claim_selectors": [
+        { "by": "xpath", "value": "//button[contains(., 'Claim') or contains(., 'claim')]" }
+      ]
+    }
+  ]
+}

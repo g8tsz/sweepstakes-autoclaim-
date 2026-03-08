@@ -6,6 +6,7 @@ import re
 import os
 import discord
 import asyncio
+import datetime as dt
 from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -21,17 +22,25 @@ email, password = None, None
 if google_login and ":" in google_login:
     email, password = google_login.split(":", 1)  # split once in case password has ":"
 
-async def google_auth(ctx, driver, channel, credentials):
+
+def _embed(title: str, description: str, color: int = 0x3B82F6) -> discord.Embed:
+    e = discord.Embed(title=title, description=description, color=color)
+    e.set_footer(text="Casino Claim")
+    e.timestamp = dt.datetime.now(dt.timezone.utc)
+    return e
+
+
+async def google_auth(ctx, driver, channel, credentials, wait_2fa_fn=None):
     try:
-        if credentials:
+        if credentials and len(credentials) == 2 and credentials[0] and credentials[1]:
             username, password = credentials
         else:
             username = email or os.getenv("GOOGLE_USERNAME")
-            password = password or os.getenv("GOOGLE_PASSWORD")
+            password = password or os.getenv("GOOGLE_PASSWORD")  # module-level password from GOOGLE_LOGIN
 
         # If no credentials, notify and exit
         if not username or not password:
-            await channel.send("No Google credentials found in `.env`")
+            await channel.send(embed=_embed("Google Auth", "No Google credentials found. Set GOOGLE_LOGIN in `.env` or use `/profile set_google`.", 0xF59E0B))
             return
 
         # Start login process
@@ -60,13 +69,16 @@ async def google_auth(ctx, driver, channel, credentials):
         await channel.send(file=discord.File(screenshot1_path))
         os.remove(screenshot1_path)
 
-        await channel.send("Approve 2FA to authenticate Google Account within 60 seconds.")
-        await asyncio.sleep(60)
+        await channel.send(embed=_embed("Google Auth — 2FA", "Approve 2FA to authenticate Google Account within 60 seconds.", 0x3B82F6))
+        if wait_2fa_fn is not None:
+            await wait_2fa_fn()
+        else:
+            await asyncio.sleep(60)
 
         # Final success message
         driver.get("https://myaccount.google.com/")
         await asyncio.sleep(5)
-        await channel.send("Google Auth Successful!")
+        await channel.send(embed=_embed("Google Auth — Success", "Google Auth successful!", 0x22C55E))
 
         google_screenshot_path = "google_screenshot.png"
         driver.save_screenshot(google_screenshot_path)
@@ -74,5 +86,5 @@ async def google_auth(ctx, driver, channel, credentials):
         os.remove(google_screenshot_path)
 
     except Exception as e:
-        await channel.send(f"Error in google_auth: {str(e)}")
+        await channel.send(embed=_embed("Google Auth — Error", str(e)[:500], 0xEF4444))
     return

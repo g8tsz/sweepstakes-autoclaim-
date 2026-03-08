@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Profile — Casino Claim{% endblock %}
+{% block content %}
+<h1>Profile</h1>
+<p>Set your Google and casino credentials so the loop and "Run now" can claim bonuses.</p>
+{% if msg %}<p class="success">{{ msg }}</p>{% endif %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<div class="card">
+    <h2 style="margin-top: 0;">Google login</h2>
+    <p>Used for universal casinos (and any flow that uses "Sign in with Google").</p>
+    <form method="post" action="/profile/google">
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" value="{{ profile.google_email or '' }}" required>
+        </div>
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required placeholder="Enter password to save">
+        </div>
+        <button type="submit" class="btn">Save Google login</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2 style="margin-top: 0;">Casino credentials</h2>
+    <p>Format: <code>username:password</code> for each casino. Use the casino name (e.g. STAKE, CHANCED).</p>
+    <form method="post" action="/profile/casinos">
+        <div class="form-group">
+            <label for="casino_name">Casino name</label>
+            <input type="text" id="casino_name" name="casino_name" placeholder="e.g. STAKE" list="casino-list">
+            <datalist id="casino-list">
+                {% for c in casino_choices %}<option value="{{ c }}">{% endfor %}
+            </datalist>
+        </div>
+        <div class="form-group">
+            <label for="credentials">Credentials (username:password)</label>
+            <input type="text" id="credentials" name="credentials" placeholder="user:pass">
+        </div>
+        <button type="submit" class="btn">Save casino</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2 style="margin-top: 0;">Current profile</h2>
+    {% if profile.google_set %}
+    <p>Google: <strong>{{ profile.google_email }}</strong></p>
+    {% else %}
+    <p>Google: not set</p>
+    {% endif %}
+    {% if profile.casino_keys %}
+    <p>Casinos: {{ profile.casino_keys|join(', ') }}</p>
+    {% else %}
+    <p>Casinos: none</p>
+    {% endif %}
+</div>
+{% endblock %}
